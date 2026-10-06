@@ -44,13 +44,11 @@ impl RpcDescription {
 
 		let method_impls = self.render_methods()?;
 		let into_rpc_impl = self.render_into_rpc()?;
-		let async_trait = self.jrps_server_item(quote! { core::__reexports::async_trait });
 
 		// Doc-comment to be associated with the server.
 		let doc_comment = format!("Server trait implementation for the `{}` RPC API.", &self.trait_def.ident);
 
 		let trait_impl = quote! {
-			#[#async_trait]
 			#[doc = #doc_comment]
 			pub trait #trait_name #impl_generics: Sized + Send + Sync + 'static #where_clause {
 				#method_impls
@@ -73,6 +71,8 @@ impl RpcDescription {
 				method_sig.sig.inputs.insert(1, ext);
 			}
 
+			let method_sig = into_send_future(method_sig);
+
 			quote! {
 				#docs
 				#method_sig
@@ -94,6 +94,8 @@ impl RpcDescription {
 				let ext: syn::FnArg = syn::parse_quote!(ext: &#ext_ty);
 				sub_sig.sig.inputs.insert(2, ext);
 			}
+
+			let sub_sig = into_send_future(sub_sig);
 
 			quote! {
 				#docs
@@ -457,4 +459,40 @@ impl RpcDescription {
 
 		(parsing, params_fields)
 	}
+}
+
+/// Rewrites `async fn foo(..) -> T` into `fn foo(..) -> impl Future<Output = T> + Send`
+/// such that `into_rpc` can rely on the returned future being `Send`.
+///
+/// A default body is wrapped in an `async move` block which takes ownership of all
+/// arguments, just like `async fn` does.
+fn into_send_future(mut method: syn::TraitItemFn) -> syn::TraitItemFn {
+	if method.sig.asyncness.take().is_none() {
+		return method;
+	}
+
+	let output = match &method.sig.output {
+		syn::ReturnType::Default => quote! { () },
+		syn::ReturnType::Type(_, ty) => quote! { #ty },
+	};
+	method.sig.output = syn::parse_quote! { -> impl ::core::future::Future<Output = #output> + Send };
+
+	if let Some(body) = method.default.take() {
+		let args = method.sig.inputs.iter().filter_map(|arg| match arg {
+			syn::FnArg::Typed(arg) => match &*arg.pat {
+				syn::Pat::Ident(pat) => Some(&pat.ident),
+				_ => None,
+			},
+			syn::FnArg::Receiver(_) => None,
+		});
+
+		method.default = Some(syn::parse_quote! {{
+			async move {
+				#(let #args = #args;)*
+				#body
+			}
+		}});
+	}
+
+	method
 }

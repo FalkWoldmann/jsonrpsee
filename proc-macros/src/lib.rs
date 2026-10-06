@@ -73,6 +73,8 @@ pub(crate) mod visitor;
 ///
 /// - Implementors of the server trait must be `Sync`, `Send`, `Sized` and `'static`. If you want to implement this
 ///   trait on some type that is not thread-safe, consider using `Arc<RwLock<..>>`.
+/// - Futures returned by `async` methods and subscriptions must be `Send`, and their return types must be at least
+///   as visible as the trait.
 ///
 /// ## Examples
 ///
@@ -95,14 +97,14 @@ pub(crate) mod visitor;
 /// Server code that will be generated:
 ///
 /// ```ignore
-/// #[async_trait]
 /// pub trait RpcServer {
 ///     // RPC methods are normal methods and can be either sync or async.
-///     async fn async_method(&self, param_a: u8, param_b: String) -> u16;
+///     // Async methods return a `Send` future and can be implemented with `async fn`.
+///     fn async_method(&self, param_a: u8, param_b: String) -> impl Future<Output = u16> + Send;
 ///     fn sync_method(&self) -> String;
 ///
 ///     // Note that `pending_subscription_sink` was added automatically.
-///     async fn sub(&self, pending: PendingSubscriptionSink) -> SubscriptionResult;
+///     fn sub(&self, pending: PendingSubscriptionSink) -> impl Future<Output = SubscriptionResult> + Send;
 ///
 ///     fn into_rpc(self) -> Result<Self, jsonrpsee::core::Error> {
 ///         // Actual implementation stripped, but inside we will create
@@ -114,7 +116,6 @@ pub(crate) mod visitor;
 /// Client code that will be generated:
 ///
 /// ```ignore
-/// #[async_trait]
 /// pub trait RpcClient: SubscriptionClient {
 ///     // In client implementation all the methods are (obviously) async.
 ///     async fn async_method(&self, param_a: u8, param_b: String) -> Result<u16, Error> {
@@ -233,9 +234,9 @@ pub(crate) mod visitor;
 /// mod rpc_impl {
 ///     use jsonrpsee::{proc_macros::rpc, Extensions};
 ///     use jsonrpsee::server::{PendingSubscriptionSink, SubscriptionMessage, IntoSubscriptionCloseResponse, SubscriptionCloseResponse};
-///     use jsonrpsee::core::{async_trait, RpcResult, SubscriptionResult, to_json_raw_value};
+///     use jsonrpsee::core::{RpcResult, SubscriptionResult, to_json_raw_value};
 ///
-///     enum CloseResponse {
+///     pub enum CloseResponse {
 ///         None,
 ///         Failed,
 ///     }
@@ -314,7 +315,6 @@ pub(crate) mod visitor;
 ///     pub struct RpcServerImpl;
 ///
 ///     // Note that the trait name we use is `MyRpcServer`, not `MyRpc`!
-///     #[async_trait]
 ///     impl MyRpcServer for RpcServerImpl {
 ///         async fn async_method(&self, _param_a: u8, _param_b: String) -> RpcResult<u16> {
 ///             Ok(42)
